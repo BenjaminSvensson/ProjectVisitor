@@ -1,5 +1,4 @@
 using UnityEngine;
-using System.Collections.Generic;
 
 public class PlayerHand : MonoBehaviour
 {
@@ -18,39 +17,31 @@ public class PlayerHand : MonoBehaviour
     [SerializeField] private LayerMask interactibleMask;
     [SerializeField] private float interactCheckDistance = 3f;
 
-    [Header("Animation States")]
-    [SerializeField] private string handIdleState = "HandIdle";
-    [SerializeField] private string handInteractState = "HandInteract";
-    [SerializeField] private string handRunState = "HandRun";
-    [SerializeField] private string handCrouchState = "HandCrouch";
-    [SerializeField] private string handJumpState = "HandJump";
+    // Converted to Animator Hashes for better performance
+    private readonly int isRunningHash = Animator.StringToHash("IsRunning");
+    private readonly int isCrouchingHash = Animator.StringToHash("IsCrouching");
+    private readonly int interactTriggerHash = Animator.StringToHash("Interact");
+    private readonly int jumpTriggerHash = Animator.StringToHash("Jump");
 
     private bool isRunning;
     private bool isCrouching;
     private bool isLookingAtInteractible;
-
-    private string currentAnimationState;
     private bool showingInteractHand;
     private bool hasAppliedHandVisual;
-    private string activeOneShotState;
-    private float oneShotEndTime;
-    private Dictionary<string, float> clipLengthsByName;
 
     private void Awake()
     {
         if (playerCamera == null)
-        {
             playerCamera = Camera.main;
-        }
 
-        BuildClipLengthCache();
         ApplyHandVisual(false);
     }
 
     private void Update()
     {
         UpdateInteractLookState();
-        RefreshVisualAndAnimation();
+        UpdateAnimator();
+        ApplyHandVisual(isLookingAtInteractible);
     }
 
     public void SetMovementState(bool running, bool crouching)
@@ -61,17 +52,29 @@ public class PlayerHand : MonoBehaviour
 
     public void TryTriggerInteract()
     {
-        if (!isLookingAtInteractible)
-        {
-            return;
-        }
+        if (!isLookingAtInteractible) return;
 
-        TriggerOneShot(handInteractState);
+        if (handAnimator != null)
+        {
+            handAnimator.SetTrigger(interactTriggerHash);
+        }
     }
 
     public void TriggerJump()
     {
-        TriggerOneShot(handJumpState);
+        if (handAnimator != null)
+        {
+            handAnimator.SetTrigger(jumpTriggerHash);
+        }
+    }
+
+    private void UpdateAnimator()
+    {
+        if (handAnimator == null) return;
+
+        // Pass the booleans to the Animator, let the Animator handle transitions and loops!
+        handAnimator.SetBool(isRunningHash, isRunning);
+        handAnimator.SetBool(isCrouchingHash, isCrouching);
     }
 
     private void UpdateInteractLookState()
@@ -91,160 +94,15 @@ public class PlayerHand : MonoBehaviour
             QueryTriggerInteraction.Ignore);
     }
 
-    private void RefreshVisualAndAnimation()
-    {
-        ApplyHandVisual(isLookingAtInteractible);
-
-        if (IsOneShotPlaying())
-        {
-            return;
-        }
-
-        string targetState = ResolveAnimationState();
-        if (handAnimator == null)
-        {
-            return;
-        }
-
-        if (targetState == currentAnimationState)
-        {
-            EnsureBaseStateKeepsPlaying(targetState);
-            return;
-        }
-
-        handAnimator.CrossFadeInFixedTime(targetState, 0.1f);
-        currentAnimationState = targetState;
-    }
-
-    private string ResolveAnimationState()
-    {
-        if (isCrouching)
-        {
-            return handCrouchState;
-        }
-
-        if (isRunning)
-        {
-            return handRunState;
-        }
-
-        return handIdleState;
-    }
-
-    private void TriggerOneShot(string stateName)
-    {
-        if (handAnimator == null || string.IsNullOrWhiteSpace(stateName))
-        {
-            return;
-        }
-
-        handAnimator.CrossFadeInFixedTime(stateName, 0.05f);
-        currentAnimationState = stateName;
-        activeOneShotState = stateName;
-
-        float clipLength = GetClipLength(stateName);
-        oneShotEndTime = Time.time + Mathf.Max(clipLength, 0.1f);
-    }
-
-    private bool IsOneShotPlaying()
-    {
-        if (string.IsNullOrEmpty(activeOneShotState))
-        {
-            return false;
-        }
-
-        if (!IsCurrentState(activeOneShotState))
-        {
-            activeOneShotState = null;
-            return false;
-        }
-
-        if (Time.time < oneShotEndTime)
-        {
-            return true;
-        }
-
-        activeOneShotState = null;
-        return false;
-    }
-
-    private void BuildClipLengthCache()
-    {
-        clipLengthsByName = new Dictionary<string, float>();
-
-        if (handAnimator == null || handAnimator.runtimeAnimatorController == null)
-        {
-            return;
-        }
-
-        AnimationClip[] clips = handAnimator.runtimeAnimatorController.animationClips;
-        for (int i = 0; i < clips.Length; i++)
-        {
-            AnimationClip clip = clips[i];
-            if (clip == null || clipLengthsByName.ContainsKey(clip.name))
-            {
-                continue;
-            }
-
-            clipLengthsByName.Add(clip.name, clip.length);
-        }
-    }
-
-    private float GetClipLength(string stateName)
-    {
-        if (clipLengthsByName != null && clipLengthsByName.TryGetValue(stateName, out float length))
-        {
-            return length;
-        }
-
-        return 0.1f;
-    }
-
-    private void EnsureBaseStateKeepsPlaying(string stateName)
-    {
-        AnimatorStateInfo currentStateInfo = handAnimator.GetCurrentAnimatorStateInfo(0);
-        if (currentStateInfo.loop)
-        {
-            return;
-        }
-
-        if (currentStateInfo.normalizedTime < 1f)
-        {
-            return;
-        }
-
-        handAnimator.Play(stateName, 0, 0f);
-    }
-
-    private bool IsCurrentState(string stateName)
-    {
-        if (handAnimator == null || string.IsNullOrWhiteSpace(stateName))
-        {
-            return false;
-        }
-
-        int targetHash = Animator.StringToHash(stateName);
-        AnimatorStateInfo currentStateInfo = handAnimator.GetCurrentAnimatorStateInfo(0);
-        return currentStateInfo.shortNameHash == targetHash;
-    }
-
     private void ApplyHandVisual(bool useInteractVisual)
     {
-        if (handMesh == null)
-        {
-            return;
-        }
+        if (handMesh == null) return;
 
         if (hasAppliedHandVisual && showingInteractHand == useInteractVisual)
-        {
             return;
-        }
 
         Texture nextTexture = useInteractVisual ? interactHandImage : normalHandImage;
-        if (nextTexture == null)
-        {
-            return;
-        }
+        if (nextTexture == null) return;
 
         Material material = handMesh.material;
 
